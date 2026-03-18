@@ -1,0 +1,310 @@
+"""
+Main Bot Loop — Wires all 7 layers together.
+Owner: Narhen
+
+Flow every 60 seconds:
+1. Fetch price → store tick
+2. Layer 1: Regime Detection
+3. Layer 2: Signal Generation
+4. Layer 3: Reversal Blocker
+5. Layer 4: Multi-Timeframe Filter (cheap filter first)
+6. Layer 5: XGBoost Confirmation (expensive filter last)
+7. Layer 6: Position Sizing
+8. Layer 7: Execute
+9. Save state, log, repeat
+"""
+
+import time
+import logging
+import os
+from datetime import datetime
+
+from config import (
+    TRADING_PAIR, TRADE_INTERVAL_SECONDS, LOG_FILE, LOG_LEVEL,
+    XGBOOST_MIN_PROBABILITY, LOGS_DIR,
+)
+from roostoo_client import RoostooClient
+from data.candle_builder import CandleBuilder
+from data.state import save_state, load_state, default_state
+from data.fetchers import fetch_fear_greed, fetch_funding_rate, fetch_market_breadth
+from strategy.regime import detect_regime
+from strategy.signals import generate_signal
+from strategy.reversal_blocker import check_reversal_block
+from strategy.timeframe import check_timeframe
+from strategy.ml_model import xgboost_confirm, engineer_features
+from risk.position_sizer import calculate_position
+from execution.executor import execute_trade
+
+# ── Setup Logging ──
+os.makedirs(LOGS_DIR, exist_ok=True)
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL),
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_FILE),
+        logging.StreamHandler(),
+    ],
+)
+log = logging.getLogger("TradingBot")
+
+
+class TradingBot:
+    def __init__(self):
+        self.client = RoostooClient()
+        self.candles = CandleBuilder()
+        self.state = load_state() or default_state()
+        self.running = False
+
+        # External data (refreshed periodically)
+        self.fear_greed = 50
+        self.funding_rate = 0.0
+        self.breadth = 0.5
+        self.last_regime_check = 0
+        self.last_external_fetch = 0
+
+    def bootstrap(self):
+        """Cold start: load historical data."""
+        loaded = self.candles.bootstrap()
+        if loaded:
+            log.info(f"Bootstrapped with historical data: {len(self.candles.df_1h)} 1H candles")
+        else:
+            log.warning("No historical data found. Bot will build history from live ticks.")
+            log.warning(f"Expected file: {os.path.abspath('data/btc_1h_90days.csv')}")
+
+    def fetch_external_data(self):
+        """Fetch Fear & Greed, funding rate, breadth (every hour)."""
+        now = time.time()
+        if now - self.last_external_fetch < 3600:  # Once per hour
+            return
+
+        try:
+            self.fear_greed = fetch_fear_greed()
+            self.funding_rate = fetch_funding_rate()
+            self.breadth = fetch_market_breadth()
+            self.last_external_fetch = now
+            log.info(f"External data: F&G={self.fear_greed}, Funding={self.funding_rate:.6f}, Breadth={self.breadth:.2f}")
+        except Exception as e:
+            log.error(f"Error fetching external data: {e}")
+
+    def is_halted(self) -> bool:
+        """Check if bot is in halt/cooldown mode."""
+        halt_until = self.state.get('halt_until')
+        if halt_until:
+            if datetime.utcnow().isoformat() < halt_until:
+                return True
+            else:
+                self.state['halt_until'] = None
+        return False
+
+    def is_cooled_down(self) -> bool:
+        """Check if post-stop-loss cooldown is active."""
+        cooldown_until = self.state.get('cooldown_until')
+        if cooldown_until:
+            if datetime.utcnow().isoformat() < cooldown_until:
+                return True
+            else:
+                self.state['cooldown_until'] = None
+        return False
+
+    def has_position(self) -> bool:
+        """Check if we currently hold BTC (S2: one position at a time)."""
+        return len(self.state.get('positions', [])) > 0
+
+    def run_cycle(self):
+        """Run one complete trading cycle through all 7 layers."""
+        self.state['cycle_count'] = self.state.get('cycle_count', 0) + 1
+        cycle = self.state['cycle_count']
+
+        # ── Fetch current price ──
+        try:
+            ticker = self.client.get_ticker(TRADING_PAIR)
+            price = float(ticker.get('LastPrice', 0))
+            bid = float(ticker.get('MaxBid', 0))
+            ask = float(ticker.get('MinAsk', 0))
+            volume = float(ticker.get('CoinTradeValue', 0))
+        except Exception as e:
+            log.error(f"Cycle {cycle}: Error fetching price: {e}")
+            return
+
+        if price <= 0:
+            log.warning(f"Cycle {cycle}: Invalid price {price}, skipping")
+            return
+
+        # Store tick
+        self.candles.add_tick(price, volume, bid, ask)
+
+        # ── Check halts ──
+        if self.is_halted():
+            log.info(f"Cycle {cycle}: Bot is HALTED. Price=${price:.2f}. Collecting data only.")
+            return
+
+        # ── Fetch external data (hourly) ──
+        self.fetch_external_data()
+
+        # Get DataFrames
+        df_1h = self.candles.get_df('1h')
+
+        if df_1h.empty or len(df_1h) < 55:
+            log.info(f"Cycle {cycle}: Waiting for data ({len(df_1h)} 1H candles, need 55+). Price=${price:.2f}")
+            return
+
+        # ══════════════════════════════════════════
+        # LAYER 1: REGIME DETECTION
+        # ══════════════════════════════════════════
+        regime = detect_regime(df_1h, self.fear_greed, self.funding_rate, self.breadth)
+
+        # ══════════════════════════════════════════
+        # LAYER 2: SIGNAL GENERATION
+        # ══════════════════════════════════════════
+        signal = generate_signal(df_1h, regime)
+        direction = signal['direction']
+        source = signal['source']
+
+        if direction == 'HOLD':
+            log.info(f"Cycle {cycle}: HOLD | Regime={regime} | Price=${price:.2f} | Source={source}")
+            return
+
+        # S1: SELL = exit only. No position = ignore sell signal
+        if direction == 'SELL' and not self.has_position():
+            log.info(f"Cycle {cycle}: SELL signal but no position. Ignoring.")
+            return
+
+        # S2: One position at a time
+        if direction == 'BUY' and self.has_position():
+            log.info(f"Cycle {cycle}: BUY signal but already in position. Skipping.")
+            return
+
+        # Check cooldown
+        if self.is_cooled_down():
+            log.info(f"Cycle {cycle}: In cooldown after stop-loss. Skipping.")
+            return
+
+        # ══════════════════════════════════════════
+        # LAYER 3: REVERSAL BLOCKER
+        # ══════════════════════════════════════════
+        safe = check_reversal_block(df_1h)
+        if not safe:
+            log.info(f"Cycle {cycle}: BLOCKED by reversal blocker. Signal={direction} from {source}")
+            return
+
+        # ══════════════════════════════════════════
+        # LAYER 4: MULTI-TIMEFRAME FILTER
+        # ══════════════════════════════════════════
+        df_4h = self.candles.get_df('4h')
+        df_daily = self.candles.get_df('daily')
+
+        tf_result = check_timeframe(df_1h, df_4h, df_daily)
+        if not tf_result['pass']:
+            log.info(
+                f"Cycle {cycle}: BLOCKED by timeframe filter. "
+                f"Score={tf_result['score']} Scores={tf_result['scores']}"
+            )
+            return
+
+        # ══════════════════════════════════════════
+        # LAYER 5: XGBOOST CONFIRMATION
+        # ══════════════════════════════════════════
+        features = engineer_features(df_1h)
+        xgb_prob = xgboost_confirm(features)
+
+        if xgb_prob < XGBOOST_MIN_PROBABILITY:
+            log.info(
+                f"Cycle {cycle}: BLOCKED by XGBoost. "
+                f"Prob={xgb_prob:.3f} < {XGBOOST_MIN_PROBABILITY}"
+            )
+            return
+
+        # ══════════════════════════════════════════
+        # LAYER 6: POSITION SIZING
+        # ══════════════════════════════════════════
+        equity = self.state.get('current_equity', 1_000_000)
+        trade_history = self.state.get('trade_history', [])
+
+        pos_result = calculate_position(
+            equity, regime, tf_result['multiplier'], xgb_prob, trade_history
+        )
+
+        if not pos_result['can_trade']:
+            log.info(f"Cycle {cycle}: BLOCKED by position sizer: {pos_result['reason']}")
+            return
+
+        size_usd = pos_result['size_usd']
+        size_btc = size_usd / price
+
+        # ══════════════════════════════════════════
+        # LAYER 7: EXECUTE
+        # ══════════════════════════════════════════
+        log.info(
+            f"Cycle {cycle}: EXECUTING {direction} | "
+            f"Regime={regime} | TF_score={tf_result['score']} | "
+            f"XGB={xgb_prob:.3f} | Size=${size_usd:.0f} ({size_btc:.6f} BTC) | "
+            f"Source={source} | Price=${price:.2f}"
+        )
+
+        exec_result = execute_trade(
+            self.client, direction, size_btc, price,
+            stop_level=price * 0.97,  # Default stop, Kireeti will improve
+            signal_source=source,
+        )
+
+        if exec_result['filled']:
+            # Track position
+            if direction == 'BUY':
+                self.state['positions'].append({
+                    'order_id': exec_result['order_id'],
+                    'entry_price': exec_result['fill_price'],
+                    'quantity': exec_result['fill_qty'],
+                    'entry_time': datetime.utcnow().isoformat(),
+                })
+            elif direction == 'SELL':
+                # Close position, record trade
+                self.state['positions'] = []
+
+            log.info(f"Cycle {cycle}: Order filled. ID={exec_result['order_id']}")
+        else:
+            log.warning(f"Cycle {cycle}: Order NOT filled. {exec_result.get('error', '')}")
+
+        # Save state after every trade
+        save_state(self.state)
+
+    def run(self):
+        """Main loop. Runs until stopped."""
+        self.running = True
+        log.info("=" * 60)
+        log.info("TRADING BOT STARTED")
+        log.info(f"Pair: {TRADING_PAIR}")
+        log.info(f"Interval: {TRADE_INTERVAL_SECONDS}s")
+        log.info(f"Strategy: Adaptive Regime Momentum (ARM v2) — 7 Layer Pipeline")
+        log.info("=" * 60)
+
+        # Bootstrap with historical data
+        self.bootstrap()
+
+        # Test connection
+        try:
+            server_time = self.client.get_server_time()
+            log.info(f"Connected to Roostoo. Server time: {server_time}")
+        except Exception as e:
+            log.error(f"Cannot connect to Roostoo API: {e}")
+            return
+
+        while self.running:
+            try:
+                self.run_cycle()
+                save_state(self.state)
+                time.sleep(TRADE_INTERVAL_SECONDS)
+
+            except KeyboardInterrupt:
+                log.info("\nBot stopped by user (Ctrl+C)")
+                self.running = False
+            except Exception as e:
+                log.error(f"Unexpected error in main loop: {e}", exc_info=True)
+                time.sleep(TRADE_INTERVAL_SECONDS)
+
+        log.info("BOT STOPPED")
+        save_state(self.state)
+
+
+if __name__ == "__main__":
+    bot = TradingBot()
+    bot.run()

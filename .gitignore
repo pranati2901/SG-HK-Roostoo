@@ -1,0 +1,38 @@
+# Secrets
+.env
+config_secrets.py
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+venv/
+.venv/
+
+# Data files (large)
+data/*.csv
+data/*.pkl
+
+# Models
+models/*.pkl
+models/*.joblib
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docs (not needed in repo)
+*.docx
+~$*
+
+# IDE
+.vscode/
+.idea/
+
+# Temp
+*.tmp
