@@ -34,6 +34,11 @@ from strategy.timeframe import check_timeframe
 from strategy.ml_model import xgboost_confirm, engineer_features
 from risk.position_sizer import calculate_position
 from execution.executor import execute_trade
+from execution.alerts import (
+    alert_trade, alert_stop_loss, alert_startup,
+    alert_drawdown, alert_kill_switch, alert_error, alert_daily_summary,
+    send_alert,
+)
 
 # ── Setup Logging ──
 os.makedirs(LOGS_DIR, exist_ok=True)
@@ -266,6 +271,8 @@ class TradingBot:
                 self.state['positions'] = []
 
             log.info(f"Cycle {cycle}: Order filled. ID={exec_result['order_id']}")
+            alert_trade(direction, price, size_usd, regime, source,
+                       tf_result['score'], xgb_prob)
         else:
             log.warning(f"Cycle {cycle}: Order NOT filled. {exec_result.get('error', '')}")
 
@@ -291,7 +298,13 @@ class TradingBot:
             log.info(f"Connected to Roostoo. Server time: {server_time}")
         except Exception as e:
             log.error(f"Cannot connect to Roostoo API: {e}")
+            alert_error(f"Cannot connect to Roostoo API: {e}")
             return
+
+        # Startup alert
+        df_1h = self.candles.get_df('1h')
+        regime = detect_regime(df_1h) if len(df_1h) > 55 else 'UNKNOWN'
+        alert_startup(self.state.get('current_equity', 50000), regime, len(df_1h))
 
         while self.running:
             try:
@@ -304,6 +317,7 @@ class TradingBot:
                 self.running = False
             except Exception as e:
                 log.error(f"Unexpected error in main loop: {e}", exc_info=True)
+                alert_error(f"Main loop error: {str(e)[:200]}")
                 time.sleep(TRADE_INTERVAL_SECONDS)
 
         log.info("BOT STOPPED")
