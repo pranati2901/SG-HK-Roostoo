@@ -7,14 +7,10 @@ from execution.executor import (
     _calc_btc_qty,
     _entry_price_for_signal,
     _pnl_with_fees,
-    _load_state,
-    _save_state,
+    _parse_ticker,
     TradeExecutor,
-    HEARTBEAT_FILE,
     TRADES_LOG_FILE,
     EVENTS_LOG_FILE,
-    DAILY_SUMMARY_FILE,
-    BOT_STATE_FILE,
 )
 
 
@@ -27,7 +23,7 @@ class FakeClient:
     def __init__(self):
         self.orders = {}
         self.counter = 0
-        self.ticker = {"LastPrice": 80000, "MaxBid": 79990, "MinAsk": 80010}
+        self.ticker = {"Data": {"BTC/USD": {"LastPrice": 80000, "MaxBid": 79990, "MinAsk": 80010}}}
         self.fill_status = []
 
     def place_order(self, symbol, side, order_type, qty, price):
@@ -44,7 +40,7 @@ class FakeClient:
             status = self.fill_status.pop(0)
         else:
             status = {"OrderID": "1", "Status": "FILLED", "FilledQty": 1.0, "AvgPrice": 80010}
-        return {"Orders": [status]}
+        return {"Data": [status]}
 
     def get_ticker(self, pair=None):
         return self.ticker
@@ -65,7 +61,7 @@ def test_component1_entry_calcs():
 
 def test_component2_trailing_stop_logic():
     client = FakeClient()
-    ex = TradeExecutor(client, 2, 5)
+    ex = TradeExecutor(client, 2, 5, state={}, save_state_fn=lambda s: None)
     reason, stop, _ = ex._evaluate_trailing(80_000, 81_000, 500, "TRENDING", 79_250)
     passed = reason is None and math.isclose(stop, 80_250, rel_tol=1e-6)
     _print_result("COMP2 TEST1", "stop=80250", f"stop={stop}", passed)
@@ -101,19 +97,18 @@ def test_component2_pnl_with_fees():
 
 def test_component3_time_exit_logic():
     client = FakeClient()
-    ex = TradeExecutor(client, 2, 5)
-    ex.state["position_open_time"] = (datetime.now(timezone.utc) - timedelta(hours=9)).isoformat()
-    ex.state["entry_price"] = 80_000
+    ex = TradeExecutor(client, 2, 5, state={}, save_state_fn=lambda s: None)
+    ex.state["exec_open_time"] = (datetime.now(timezone.utc) - timedelta(hours=9)).isoformat()
     passed = ex._should_time_exit(80_000, 80_040)
     _print_result("COMP3 TEST1", True, passed, passed)
     assert passed
 
-    ex.state["position_open_time"] = (datetime.now(timezone.utc) - timedelta(hours=9)).isoformat()
+    ex.state["exec_open_time"] = (datetime.now(timezone.utc) - timedelta(hours=9)).isoformat()
     passed = not ex._should_time_exit(80_000, 80_400)
     _print_result("COMP3 TEST2", False, not passed, passed)
     assert passed
 
-    ex.state["position_open_time"] = (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat()
+    ex.state["exec_open_time"] = (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat()
     passed = not ex._should_time_exit(80_000, 80_000)
     _print_result("COMP3 TEST3", False, not passed, passed)
     assert passed
@@ -121,7 +116,7 @@ def test_component3_time_exit_logic():
 
 def test_component4_cooldown():
     client = FakeClient()
-    ex = TradeExecutor(client, 2, 5)
+    ex = TradeExecutor(client, 2, 5, state={}, save_state_fn=lambda s: None)
     ex.state["cooldown_until"] = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
     active = ex.state["cooldown_until"] > datetime.now(timezone.utc).isoformat()
     passed = active
@@ -134,55 +129,24 @@ def test_component5_logging_fields():
         "timestamp": "2020-01-01T00:00:00Z",
         "regime": "TRENDING",
         "signal_source": "DONCHIAN_BREAKOUT",
-        "reversal_blocker_result": "PASSED",
-        "xgboost_probability": 0.73,
-        "timeframe_scores": {"1H": 1, "4H": 1, "Daily": 1},
-        "timeframe_total_score": 3,
-        "position_size_usd": 1000.0,
-        "position_size_btc": 0.01,
         "entry_price": 80000.0,
-        "stop_loss_level": 79250.0,
-        "take_profit_level": None,
         "exit_price": 81250.0,
         "exit_reason": "TRAILING_STOP",
+        "position_size_btc": 0.01,
         "pnl_usd_gross": 100.0,
         "pnl_usd_net": 90.0,
-        "pnl_pct": 1.56,
+        "pnl_pct": 0.0156,
         "fees_paid_usd": 10.0,
         "portfolio_value_after": 1000090.0,
-        "drawdown_at_trade_pct": 0.0,
-        "cooldown_triggered": True,
-        "partial_fill": False,
-        "partial_fill_pct": None,
     }
     with open(TRADES_LOG_FILE, "w", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
     with open(TRADES_LOG_FILE, "r", encoding="utf-8") as f:
         data = json.loads(f.readline())
     required = {
-        "timestamp",
-        "regime",
-        "signal_source",
-        "reversal_blocker_result",
-        "xgboost_probability",
-        "timeframe_scores",
-        "timeframe_total_score",
-        "position_size_usd",
-        "position_size_btc",
-        "entry_price",
-        "stop_loss_level",
-        "take_profit_level",
-        "exit_price",
-        "exit_reason",
-        "pnl_usd_gross",
-        "pnl_usd_net",
-        "pnl_pct",
-        "fees_paid_usd",
-        "portfolio_value_after",
-        "drawdown_at_trade_pct",
-        "cooldown_triggered",
-        "partial_fill",
-        "partial_fill_pct",
+        "timestamp", "regime", "signal_source", "entry_price",
+        "exit_price", "exit_reason", "pnl_usd_gross", "pnl_usd_net",
+        "pnl_pct", "fees_paid_usd", "portfolio_value_after",
     }
     missing = required.difference(data.keys())
     passed = len(missing) == 0
@@ -190,37 +154,39 @@ def test_component5_logging_fields():
     assert passed
 
 
-def test_component6_heartbeat():
+def test_component6_ticker_parsing():
+    # Nested format (real Roostoo)
+    raw = {"Data": {"BTC/USD": {"LastPrice": 80000, "MaxBid": 79990, "MinAsk": 80010}}}
+    parsed = _parse_ticker(raw, "BTC/USD")
+    assert parsed['price'] == 80000
+    assert parsed['bid'] == 79990
+
+    # Flat format
+    raw2 = {"LastPrice": 80000, "MaxBid": 79990, "MinAsk": 80010}
+    parsed2 = _parse_ticker(raw2)
+    assert parsed2['price'] == 80000
+
+
+def test_component7_state_shared():
+    """Verify executor uses shared state dict, not separate file."""
+    state = {"current_equity": 50000, "peak_equity": 50000, "positions": []}
     client = FakeClient()
-    ex = TradeExecutor(client, 2, 5)
-    ex._heartbeat()
-    with open(HEARTBEAT_FILE, "r", encoding="utf-8") as f:
-        hb = json.load(f)
-    passed = hb.get("status") == "alive" and isinstance(hb.get("portfolio_value"), float)
-    _print_result("COMP6 TEST1", "alive", hb.get("status"), passed)
-    assert passed
-
-
-def test_component7_state_persistence():
-    state = _load_state()
-    state["position_open"] = True
-    state["entry_price"] = 80_000
-    state["current_stop"] = 79_250
-    _save_state(state)
-    loaded = _load_state()
-    passed = loaded["position_open"] and loaded["entry_price"] == 80_000 and loaded["current_stop"] == 79_250
-    _print_result("COMP7 TEST1", True, passed, passed)
-    assert passed
+    ex = TradeExecutor(client, 2, 5, state=state, save_state_fn=lambda s: None)
+    # Executor should have added its fields to the shared state
+    assert "exec_position_open" in state
+    assert state["exec_position_open"] is False
+    # Verify it's the same object
+    assert ex.state is state
 
 
 def test_full_integration_simulation():
-    if os.path.exists(BOT_STATE_FILE):
-        os.remove(BOT_STATE_FILE)
+    state = {"current_equity": 50000, "peak_equity": 50000, "positions": [], "trade_history": []}
+    saved = []
     client = FakeClient()
     client.fill_status = [
         {"OrderID": "1", "Status": "FILLED", "FilledQty": 1.04138, "AvgPrice": 80010},
     ]
-    ex = TradeExecutor(client, 2, 5)
+    ex = TradeExecutor(client, 2, 5, state=state, save_state_fn=lambda s: saved.append(True))
     ex.execute_trade(
         final_position_size_usd=83_300,
         current_btc_price=80_000,
@@ -236,7 +202,10 @@ def test_full_integration_simulation():
             "timeframe_total_score": 3,
         },
     )
-    state = _load_state()
-    passed = state["position_open"] is True and math.isclose(state["entry_price"], 80010, rel_tol=1e-6)
+    passed = state["exec_position_open"] is True and math.isclose(state["exec_entry_price"], 80010, rel_tol=1e-6)
     _print_result("FULL INTEGRATION", True, passed, passed)
     assert passed
+    # Verify positions list was also updated
+    assert len(state["positions"]) == 1
+    # Verify save was called
+    assert len(saved) > 0

@@ -75,6 +75,8 @@ class TradingBot:
             self.client,
             price_precision=precision.get('price_precision', 2),
             amount_precision=precision.get('amount_precision', 5),
+            state=self.state,
+            save_state_fn=save_state,
         )
 
         # External data (refreshed periodically)
@@ -183,10 +185,7 @@ class TradingBot:
 
     def has_position(self) -> bool:
         """Check if we currently hold BTC (S2: one position at a time)."""
-        executor_state = getattr(self, 'executor', None)
-        if executor_state and hasattr(self.executor, 'state'):
-            return bool(self.executor.state.get('position_open'))
-        return len(self.state.get('positions', [])) > 0
+        return bool(self.state.get('exec_position_open')) or len(self.state.get('positions', [])) > 0
 
     def run_cycle(self):
         """Run one complete trading cycle through all 7 layers."""
@@ -322,6 +321,25 @@ class TradingBot:
         atr_series = calculate_atr(df_1h)
         atr_14 = float(atr_series.iloc[-1]) if not atr_series.empty else est_stop_distance
 
+        # Compute rolling 3-day Sharpe from recent trades (for kill switch)
+        rolling_sharpe = 0.0
+        recent_trades = trade_history[-20:] if trade_history else []
+        if len(recent_trades) >= 3:
+            returns = [t.get('pnl_pct', 0) for t in recent_trades]
+            import statistics
+            mean_ret = statistics.mean(returns)
+            std_ret = statistics.stdev(returns) if len(returns) > 1 else 1.0
+            rolling_sharpe = mean_ret / std_ret if std_ret > 0 else 0.0
+
+        # SELL signals go straight to executor (no sizing needed)
+        if direction == 'SELL':
+            log.info(
+                f"Cycle {cycle}: EXECUTING SELL | "
+                f"Regime={regime} | Source={source} | Price=${price:.2f}"
+            )
+            self.executor.execute_sell(bid, reason=f"L2_{source}")
+            return
+
         size_usd = compute_position_size(
             current_capital=equity,
             peak_capital=self.state.get('peak_equity', equity),
@@ -332,7 +350,7 @@ class TradingBot:
             atr_usd=atr_14,
             btc_price=price,
             current_position_open=self.has_position(),
-            rolling_sharpe_3day=0.0,
+            rolling_sharpe_3day=rolling_sharpe,
             timeframe_4h_bullish=tf_result['scores'].get('4h') == 1,
             state=self.state,
             save_state_fn=save_state,
@@ -346,7 +364,7 @@ class TradingBot:
         # LAYER 7: EXECUTE
         # ══════════════════════════════════════════
         log.info(
-            f"Cycle {cycle}: EXECUTING {direction} | "
+            f"Cycle {cycle}: EXECUTING BUY | "
             f"Regime={regime} | TF_score={tf_result['score']} | "
             f"XGB={xgb_prob:.3f} | Size=${size_usd:.0f} | "
             f"Source={source} | Price=${price:.2f}"
@@ -360,19 +378,16 @@ class TradingBot:
             "timeframe_total_score": tf_result['score'],
         }
 
-        if direction == 'BUY':
-            self.executor.execute_trade(
-                final_position_size_usd=size_usd,
-                current_btc_price=price,
-                current_bid=bid,
-                current_ask=ask,
-                atr_14=atr_14,
-                regime=regime,
-                signal_source=signal_source,
-                entry_context=entry_context,
-            )
-
-        # Layer 7 executor owns execution, state updates, and logging.
+        self.executor.execute_trade(
+            final_position_size_usd=size_usd,
+            current_btc_price=price,
+            current_bid=bid,
+            current_ask=ask,
+            atr_14=atr_14,
+            regime=regime,
+            signal_source=signal_source,
+            entry_context=entry_context,
+        )
 
     def run(self):
         """Main loop. Runs until stopped."""

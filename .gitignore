@@ -34,5 +34,18 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Runtime state/log files
+state.json
+bot_state.json
+heartbeat.json
+trades_log.json
+events_log.json
+alerts_log.txt
+daily_summary.txt
+execution/bot_state.json
+execution/heartbeat.json
+execution/trades_log.json
+execution/alerts_log.txt
+
 # Temp
 *.tmp
