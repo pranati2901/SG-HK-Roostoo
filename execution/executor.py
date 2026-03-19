@@ -74,11 +74,16 @@ def _parse_ticker(raw_ticker, pair: str = TRADING_PAIR) -> dict:
     }
 
 
-def _entry_price_for_signal(current_bid: float, signal_source: str, price_precision: int) -> float:
+def _entry_price_for_signal(current_bid: float, current_ask: float,
+                            signal_source: str, price_precision: int) -> float:
+    # On mock exchange, MAKER orders at bid may never fill (no real counterparties)
+    # Cross the spread by placing at ask to guarantee fill as taker
     if signal_source == "DONCHIAN_BREAKOUT":
-        price = current_bid * (1 + BREAKOUT_AGGRESSIVE_OFFSET)
+        # Breakout: pay ask + small premium to ensure fill
+        price = current_ask * (1 + BREAKOUT_AGGRESSIVE_OFFSET)
     else:
-        price = current_bid
+        # Mean reversion: place at ask (cross spread)
+        price = current_ask
     return _round_value(price, price_precision)
 
 
@@ -209,7 +214,7 @@ class TradeExecutor:
         self.state["drawdown_alerts_fired"] = alerts
 
     def _enter_position(self, final_position_size_usd: float, current_bid: float,
-                        current_btc_price: float, signal_source: str):
+                        current_ask: float, current_btc_price: float, signal_source: str):
         if self.state.get("exec_position_open"):
             self._log_event("BUY signal ignored: position already open")
             return None
@@ -219,7 +224,7 @@ class TradeExecutor:
             self._log_event("Position too small after rounding, skipping")
             return None
 
-        limit_price = _entry_price_for_signal(current_bid, signal_source, self.price_precision)
+        limit_price = _entry_price_for_signal(current_bid, current_ask, signal_source, self.price_precision)
 
         # Attempt 1: place limit order
         try:
@@ -263,13 +268,14 @@ class TradeExecutor:
             self._log_event("Partial fill REJECTED", {"filled_pct": filled_pct})
             return None
 
-        # Attempt 2: cancel and retry with updated bid
+        # Attempt 2: cancel and retry with updated price
         try:
             self.client.cancel_order(order_id)
             raw_ticker = self.client.get_ticker(TRADING_PAIR)
             parsed = _parse_ticker(raw_ticker)
             bid = parsed['bid'] if parsed['bid'] > 0 else current_bid
-            limit_price = _entry_price_for_signal(bid, signal_source, self.price_precision)
+            ask = parsed['ask'] if parsed['ask'] > 0 else current_ask
+            limit_price = _entry_price_for_signal(bid, ask, signal_source, self.price_precision)
             order = self.client.place_order(TRADING_PAIR, "BUY", "LIMIT", qty, limit_price)
 
             detail = order.get("OrderDetail", order)
@@ -461,7 +467,7 @@ class TradeExecutor:
 
         # Order placement happens OUTSIDE lock — doesn't block stop monitor
         entry = self._enter_position(
-            final_position_size_usd, current_bid, current_btc_price, signal_source
+            final_position_size_usd, current_bid, current_ask, current_btc_price, signal_source
         )
         if not entry:
             with self.lock:

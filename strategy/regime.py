@@ -100,16 +100,16 @@ def detect_regime(df: pd.DataFrame, fear_greed: int = 50,
         atr_pct = 0.5
 
     # Decision logic
+    # VOLATILE only on extreme ATR — breadth no longer blocks trading entirely
+    # In bear markets breadth stays <40% for weeks, but BTC still has tradeable ranges
     is_volatile = (
-        atr_pct > 0.80 or           # ATR in top 20%
-        breadth < BREADTH_BEARISH    # Most coins falling
+        atr_pct > 0.85              # ATR in top 15% only
     )
 
     is_trending = (
         adx > ADX_TREND_THRESHOLD and   # Strong directional movement
         atr_pct >= 0.20 and              # Not dead quiet
-        atr_pct <= 0.80 and              # Not crazy volatile
-        breadth > BREADTH_BEARISH        # Market not collapsing
+        atr_pct <= 0.85                  # Not extreme volatility
     )
 
     is_sideways = (

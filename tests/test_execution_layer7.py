@@ -48,14 +48,17 @@ class FakeClient:
 
 def test_component1_entry_calcs():
     qty = _calc_btc_qty(83_300, 80_000, 5)
-    price = _entry_price_for_signal(79_990, "DONCHIAN_BREAKOUT", 2)
-    passed = math.isclose(qty, 1.04125, rel_tol=1e-6) and math.isclose(price, 80006.00, rel_tol=1e-6)
-    _print_result("COMP1 TEST1", "qty=1.04125 price=80006", f"qty={qty} price={price}", passed)
+    # Now uses ask price (80010) to cross spread, not bid (79990)
+    price = _entry_price_for_signal(79_990, 80_010, "DONCHIAN_BREAKOUT", 2)
+    # Breakout: ask * (1 + 0.0002) = 80010 * 1.0002 = 80026.00
+    passed = math.isclose(qty, 1.04125, rel_tol=1e-6) and math.isclose(price, 80026.00, rel_tol=1e-6)
+    _print_result("COMP1 TEST1", "qty=1.04125 price=80026", f"qty={qty} price={price}", passed)
     assert passed
 
-    price = _entry_price_for_signal(79_990, "MEAN_REVERSION", 2)
-    passed = math.isclose(price, 79990.00, rel_tol=1e-6)
-    _print_result("COMP1 TEST2", "79990.00", f"{price}", passed)
+    price = _entry_price_for_signal(79_990, 80_010, "MEAN_REVERSION", 2)
+    # Mean reversion: at ask = 80010.00
+    passed = math.isclose(price, 80010.00, rel_tol=1e-6)
+    _print_result("COMP1 TEST2", "80010.00", f"{price}", passed)
     assert passed
 
 
