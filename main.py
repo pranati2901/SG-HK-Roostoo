@@ -198,7 +198,7 @@ class TradingBot:
         df_4h = self.candles.get_df('4h')
         df_daily = self.candles.get_df('daily')
 
-        tf_result = check_timeframe(df_1h, df_4h, df_daily)
+        tf_result = check_timeframe(df_1h, df_4h, df_daily, regime=regime)
         if not tf_result['pass']:
             log.info(
                 f"Cycle {cycle}: BLOCKED by timeframe filter. "

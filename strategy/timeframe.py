@@ -46,7 +46,7 @@ def _score_timeframe(df: pd.DataFrame, use_ema50: bool = False) -> int:
 
 
 def check_timeframe(df_1h: pd.DataFrame, df_4h: pd.DataFrame,
-                    df_daily: pd.DataFrame) -> dict:
+                    df_daily: pd.DataFrame, regime: str = 'TRENDING') -> dict:
     """
     Layer 4: Multi-timeframe filter.
 
@@ -69,8 +69,9 @@ def check_timeframe(df_1h: pd.DataFrame, df_4h: pd.DataFrame,
 
     total = score_1h + score_4h + score_daily
 
-    # Hard rule: never trade against 4H trend
-    if score_4h == -1:
+    # Hard rule: never trade against 4H trend in TRENDING regime
+    # In SIDEWAYS regime, mean-reversion trades catch bounces within downtrends
+    if score_4h == -1 and regime != 'SIDEWAYS':
         return {
             'pass': False,
             'score': total,
@@ -78,15 +79,18 @@ def check_timeframe(df_1h: pd.DataFrame, df_4h: pd.DataFrame,
             'scores': {'1h': score_1h, '4h': score_4h, 'daily': score_daily},
         }
 
+    # Sideways mean-reversion needs looser filter (1H bullish is enough)
+    min_score = TF_MIN_SCORE if regime != 'SIDEWAYS' else 1
+
     if total >= 3:
         multiplier = 1.0
-    elif total >= TF_MIN_SCORE:
+    elif total >= min_score:
         multiplier = 0.5
     else:
         multiplier = 0.0
 
     return {
-        'pass': total >= TF_MIN_SCORE,
+        'pass': total >= min_score,
         'score': total,
         'multiplier': multiplier,
         'scores': {'1h': score_1h, '4h': score_4h, 'daily': score_daily},
