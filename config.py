@@ -45,8 +45,8 @@ EMA_MID = 21
 EMA_SLOW = 50
 # RSI (mean-reversion in sideways)
 RSI_PERIOD = 14
-RSI_OVERSOLD = 35                  # Buy in sideways regime
-RSI_OVERBOUGHT = 65                # Sell in sideways regime
+RSI_OVERSOLD = 42                  # Buy in sideways regime (loosened for bear market)
+RSI_OVERBOUGHT = 58                # Sell in sideways regime (loosened for bear market)
 # MACD
 MACD_FAST = 12
 MACD_SLOW = 26
@@ -62,7 +62,7 @@ BLOCKER_COOLDOWN_CYCLES = 2        # Skip 2 cycles after block
 TF_MIN_SCORE = 2                   # Minimum sum to trade (+2 or +3)
 
 # ── Layer 5: XGBoost ──
-XGBOOST_MIN_PROBABILITY = 0.65     # Minimum ML confidence to trade
+XGBOOST_MIN_PROBABILITY = 0.55     # Minimum ML confidence (loosened for bear market)
 XGBOOST_RETRAIN_HOURS = 24         # Retrain every 24 hours
 PROFIT_THRESHOLD = 0.001           # 0.1% minimum expected profit above fees
 
