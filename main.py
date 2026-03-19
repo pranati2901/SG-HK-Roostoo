@@ -367,27 +367,31 @@ class TradingBot:
         # Bootstrap with historical data
         self.bootstrap()
 
-        # Test connection and sync equity from API
+        # Test connection
         try:
             server_time = self.client.get_server_time()
             log.info(f"Connected to Roostoo. Server time: {server_time}")
+        except Exception as e:
+            log.error(f"Cannot connect to Roostoo API: {e}")
+            alert_error(f"Cannot connect to Roostoo API: {e}")
+            return
 
-            # Fetch real balance from Roostoo API
+        # Sync equity from API (non-fatal if blocked)
+        try:
             balance = self.client.get_balance()
-            balance_data = balance.get('Data', balance)
+            # Roostoo returns: {'SpotWallet': {'USD': {'Free': 50000, 'Lock': 0}}}
+            wallet = balance.get('SpotWallet', balance.get('Data', {}))
             usd_free = 0.0
-            if isinstance(balance_data, dict):
-                usd_info = balance_data.get('USD', {})
-                usd_free = float(usd_info.get('Free', 0))
+            if isinstance(wallet, dict) and 'USD' in wallet:
+                usd_free = float(wallet['USD'].get('Free', 0))
             if usd_free > 0:
                 self.state['current_equity'] = usd_free
                 self.state['peak_equity'] = max(self.state.get('peak_equity', 0), usd_free)
                 log.info(f"Synced equity from API: ${usd_free:,.0f}")
                 save_state(self.state)
         except Exception as e:
-            log.error(f"Cannot connect to Roostoo API: {e}")
-            alert_error(f"Cannot connect to Roostoo API: {e}")
-            return
+            log.warning(f"Could not fetch balance (geo-blocked?): {e}")
+            log.info(f"Using equity from state: ${self.state.get('current_equity', STARTING_CAPITAL):,.0f}")
 
         # Startup alert
         df_1h = self.candles.get_df('1h')
