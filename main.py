@@ -32,6 +32,15 @@ from strategy.signals import generate_signal
 from strategy.reversal_blocker import check_reversal_block
 from strategy.timeframe import check_timeframe
 from strategy.ml_model import xgboost_confirm, engineer_features
+
+# Try to load Pranati's live predictor
+try:
+    from live_predictor import get_xgboost_signal
+    _USE_PRANATI_MODEL = True
+    log.info("Pranati's XGBoost model loaded successfully")
+except Exception as e:
+    _USE_PRANATI_MODEL = False
+    log.warning(f"Pranati's model not available, using stub: {e}")
 from risk.position_sizer import calculate_position
 from execution.executor import execute_trade
 from execution.alerts import (
@@ -217,8 +226,18 @@ class TradingBot:
         # ══════════════════════════════════════════
         # LAYER 5: XGBOOST CONFIRMATION
         # ══════════════════════════════════════════
-        features = engineer_features(df_1h)
-        xgb_prob = xgboost_confirm(features)
+        if _USE_PRANATI_MODEL:
+            # Use Pranati's model
+            price_history = df_1h.to_dict('records')
+            current_spread = (ask - bid) / price if price > 0 and ask > 0 and bid > 0 else 0.001
+            xgb_decision, xgb_prob = get_xgboost_signal(
+                price_history, breadth=self.breadth,
+                spread_proxy=current_spread, threshold=XGBOOST_MIN_PROBABILITY
+            )
+        else:
+            # Fallback to stub
+            features = engineer_features(df_1h)
+            xgb_prob = xgboost_confirm(features)
 
         if xgb_prob < XGBOOST_MIN_PROBABILITY:
             log.info(
