@@ -94,8 +94,10 @@ def _calc_btc_qty(final_position_size_usd: float, current_btc_price: float, amou
 
 def _pnl_with_fees(entry_price: float, exit_price: float, qty: float) -> dict:
     gross_pnl = (exit_price - entry_price) * qty
-    fee_entry = entry_price * qty * MAKER_FEE
-    fee_exit = exit_price * qty * MAKER_FEE
+    # Entry crosses spread (taker), exit tries limit first but may fall back to market
+    from config import TAKER_FEE
+    fee_entry = entry_price * qty * TAKER_FEE
+    fee_exit = exit_price * qty * TAKER_FEE  # Worst case: taker on both sides
     total_fees = fee_entry + fee_exit
     net_pnl = gross_pnl - total_fees
     pnl_pct = (exit_price - entry_price) / entry_price if entry_price > 0 else 0
@@ -309,7 +311,8 @@ class TradeExecutor:
         limit_price = _round_value(current_bid, self.price_precision)
         try:
             order = self.client.place_order(TRADING_PAIR, "SELL", "LIMIT", qty, limit_price)
-            order_id = order.get("OrderID")
+            detail = order.get("OrderDetail", order)
+            order_id = detail.get("OrderID") or order.get("OrderID")
             status = _poll_order(self.client, order_id, 60, sleep_seconds=10)
             if status["status"] != "FILLED":
                 try:
@@ -404,8 +407,10 @@ class TradeExecutor:
             hours = (_utc_now() - datetime.fromisoformat(open_time)).total_seconds() / 3600
         except (ValueError, TypeError):
             return False
-        pnl_pct = abs((current_price - entry_price) / entry_price) if entry_price > 0 else 0.0
-        return hours >= TIME_EXIT_HOURS and pnl_pct < FLAT_THRESHOLD
+        pnl_pct = (current_price - entry_price) / entry_price if entry_price > 0 else 0.0
+        # Only time-exit if position is flat or losing (don't exit profitable positions)
+        # Flat = less than round-trip taker fees (0.2%), meaning exit guarantees a loss
+        return hours >= TIME_EXIT_HOURS and pnl_pct < 0.003  # 0.3% threshold (above 0.2% fees)
 
     def start_stop_monitor(self, atr_14: float, regime: str):
         def _loop():

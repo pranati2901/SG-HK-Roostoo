@@ -93,8 +93,9 @@ def test_component2_trailing_stop_logic():
 
 def test_component2_pnl_with_fees():
     pnl = _pnl_with_fees(80_000, 81_250, 1.04125)
-    passed = math.isclose(pnl["pnl_usd_net"], 1217.61, rel_tol=1e-2)
-    _print_result("COMP2 TEST6", "1217.61", f"{pnl['pnl_usd_net']:.2f}", passed)
+    # Using TAKER fees (0.1% each side) not MAKER (0.05%)
+    passed = math.isclose(pnl["pnl_usd_net"], 1133.66, rel_tol=1e-2)
+    _print_result("COMP2 TEST6", "1133.66", f"{pnl['pnl_usd_net']:.2f}", passed)
     assert passed
 
 

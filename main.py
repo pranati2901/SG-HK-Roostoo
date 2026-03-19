@@ -23,6 +23,7 @@ from datetime import datetime
 from config import (
     TRADING_PAIR, TRADE_INTERVAL_SECONDS, LOG_FILE, LOG_LEVEL,
     XGBOOST_MIN_PROBABILITY, LOGS_DIR, STARTING_CAPITAL,
+    PROTECT_DAYS_BEFORE_END,
 )
 from roostoo_client import RoostooClient
 from data.candle_builder import CandleBuilder
@@ -216,6 +217,20 @@ class TradingBot:
         # Store tick
         self.candles.add_tick(price, volume, bid, ask)
 
+        # ── Competition end-date protection ──
+        competition_end = datetime(2026, 3, 31, 23, 59)
+        days_left = (competition_end - datetime.utcnow()).total_seconds() / 86400
+        if days_left <= 1 and self.has_position():
+            # Last day: close all positions to lock in final score
+            log.info(f"Cycle {cycle}: FINAL DAY — closing position to lock score")
+            self.executor.execute_sell(bid, reason="COMPETITION_END")
+            return
+        if days_left <= PROTECT_DAYS_BEFORE_END and not self.has_position():
+            # Last 2 days: don't open new positions
+            log.info(f"Cycle {cycle}: {days_left:.1f} days left — no new positions")
+            self.candles.add_tick(price, volume, bid, ask)  # Still collect data
+            return
+
         # ── Check halts ──
         if self.is_halted():
             log.info(f"Cycle {cycle}: Bot is HALTED. Price=${price:.2f}. Collecting data only.")
@@ -247,14 +262,16 @@ class TradingBot:
             log.info(f"Cycle {cycle}: HOLD | Regime={regime} | Price=${price:.2f} | Source={source}")
             return
 
-        # PROTECT GAINS MODE: after profitable trades, require higher confidence
-        # This maximizes Sortino/Sharpe by avoiding giving back profits
+        # PROTECT GAINS MODE: after meaningful profit, require higher confidence
+        # Losses hurt ratios 5x more than equivalent wins help (Calmar asymmetry)
         trade_history = self.state.get('trade_history', [])
         total_pnl = sum(t.get('pnl', 0) for t in trade_history)
-        if total_pnl > 0 and len(trade_history) >= 2:
-            # We're in profit — only take very high confidence trades
+        equity = self.state.get('current_equity', STARTING_CAPITAL)
+        pnl_pct = total_pnl / equity if equity > 0 else 0
+        if pnl_pct > 0.005 and len(trade_history) >= 3:
+            # Up >0.5% with 3+ trades — protect gains
             self.state['_protect_mode'] = True
-            log.info(f"Cycle {cycle}: PROTECT MODE active (P&L: ${total_pnl:+,.0f})")
+            log.info(f"Cycle {cycle}: PROTECT MODE active (P&L: {pnl_pct:.2%})")
         else:
             self.state['_protect_mode'] = False
 
