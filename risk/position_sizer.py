@@ -41,7 +41,7 @@ from data.state import load_state, save_state, default_state
 #                 peak value, and risk limits after a crash or restart.
 # Inputs: state (a dictionary or None) meaning the current saved memory.
 # Outputs: a valid dictionary with all expected state fields.
-def _ensure_state(state: dict | None) -> dict:
+def _ensure_state(state: dict) -> dict:
     # If the caller already gave us a state dictionary, use it as-is.
     if state is not None:
         return state
@@ -87,7 +87,7 @@ def _update_peak_equity(state: dict, current_capital: float):
 #
 # Note: "Kelly" is a formula that tries to maximize long-term growth, but it
 #       can be too aggressive. We use 0.25 (25%) of Kelly to reduce risk.
-def _quarter_kelly_size(trade_history: list, current_capital: float) -> tuple[float, float]:
+def _quarter_kelly_size(trade_history: list, current_capital: float) -> tuple:
     # Keep only the most recent 20 trades (a "rolling window" [moving list]).
     # Why 20? It is a balance: not too small (noisy) and not too big (stale).
     recent = (trade_history or [])[-20:]
@@ -217,7 +217,7 @@ def _drawdown_cap(
     timeframe_score: int,
     timeframe_4h_bullish: bool,
     state: dict,
-) -> tuple[float, bool]:
+) -> tuple:
     # If peak is zero (should not happen), allow trading with no cap.
     if peak_capital <= 0:
         return math.inf, True
@@ -338,7 +338,7 @@ def _hard_limits(current_capital: float, atr_usd: float, btc_price: float) -> di
 def handle_partial_fill(
     ordered_qty: float,
     filled_qty: float,
-    state: dict | None = None,
+    state: dict = None,
     market_sell_fn=None,
     cooldown_seconds: int = 60,
     save_state_fn=None,
@@ -405,7 +405,7 @@ def compute_position_size(
     current_position_open: bool,
     rolling_sharpe_3day: float,
     timeframe_4h_bullish: bool = False,
-    state: dict | None = None,
+    state: dict = None,
     save_state_fn=None,
     close_all_positions_fn=None,
 ) -> float:
