@@ -21,7 +21,7 @@ from datetime import datetime
 
 from config import (
     TRADING_PAIR, TRADE_INTERVAL_SECONDS, LOG_FILE, LOG_LEVEL,
-    XGBOOST_MIN_PROBABILITY, LOGS_DIR,
+    XGBOOST_MIN_PROBABILITY, LOGS_DIR, STARTING_CAPITAL,
 )
 from roostoo_client import RoostooClient
 from data.candle_builder import CandleBuilder
@@ -33,14 +33,14 @@ from strategy.reversal_blocker import check_reversal_block
 from strategy.timeframe import check_timeframe
 from strategy.ml_model import xgboost_confirm, engineer_features
 
-# Try to load Pranati's live predictor
+# Try to load Pranati's live predictor (log not yet defined, use print)
 try:
     from live_predictor import get_xgboost_signal
     _USE_PRANATI_MODEL = True
-    log.info("Pranati's XGBoost model loaded successfully")
+    print("[INFO] Pranati's XGBoost model loaded successfully")
 except Exception as e:
     _USE_PRANATI_MODEL = False
-    log.warning(f"Pranati's model not available, using stub: {e}")
+    print(f"[WARN] Pranati's model not available, using stub: {e}")
 from risk.position_sizer import calculate_position
 from execution.executor import execute_trade
 from execution.alerts import (
@@ -75,6 +75,8 @@ class TradingBot:
         self.breadth = 0.5
         self.last_regime_check = 0
         self.last_external_fetch = 0
+        self.last_daily_summary = 0
+        self.last_heartbeat = 0
 
     def bootstrap(self):
         """Cold start: load historical data."""
@@ -119,6 +121,57 @@ class TradingBot:
             else:
                 self.state['cooldown_until'] = None
         return False
+
+    def send_heartbeat(self):
+        """Send a heartbeat to Telegram every 6 hours so team knows bot is alive."""
+        now = time.time()
+        if now - self.last_heartbeat < 21600:  # 6 hours
+            return
+
+        equity = self.state.get('current_equity', STARTING_CAPITAL)
+        cycle = self.state.get('cycle_count', 0)
+        positions = self.state.get('positions', [])
+        pos_status = "IN POSITION" if positions else "CASH"
+
+        df_1h = self.candles.get_df('1h')
+        regime = detect_regime(df_1h, self.fear_greed, self.funding_rate, self.breadth) if len(df_1h) > 55 else 'UNKNOWN'
+
+        price = self.candles.get_current_price()
+
+        send_alert(
+            f"<b>HEARTBEAT</b>\n"
+            f"Bot is alive and running\n"
+            f"Cycle: #{cycle}\n"
+            f"BTC: ${price:,.2f}\n"
+            f"Equity: ${equity:,.0f}\n"
+            f"Status: {pos_status}\n"
+            f"Regime: {regime}\n"
+            f"F&G: {self.fear_greed}\n"
+            f"Time: {datetime.utcnow().strftime('%H:%M UTC')}"
+        )
+        self.last_heartbeat = now
+        log.info("Heartbeat sent to Telegram")
+
+    def send_daily_summary(self):
+        """Send daily summary to Telegram (once every 24 hours)."""
+        now = time.time()
+        if now - self.last_daily_summary < 86400:  # 24 hours
+            return
+
+        equity = self.state.get('current_equity', STARTING_CAPITAL)
+        peak = self.state.get('peak_equity', STARTING_CAPITAL)
+        history = self.state.get('trade_history', [])
+
+        # Count today's trades
+        today = datetime.utcnow().strftime('%Y-%m-%d')
+        today_trades = [t for t in history if t.get('exit_time', '').startswith(today)]
+        wins = len([t for t in today_trades if t.get('pnl', 0) > 0])
+        losses = len(today_trades) - wins
+        pnl_today = sum(t.get('pnl', 0) for t in today_trades)
+
+        alert_daily_summary(equity, peak, len(today_trades), wins, losses, pnl_today)
+        self.last_daily_summary = now
+        log.info("Daily summary sent to Telegram")
 
     def has_position(self) -> bool:
         """Check if we currently hold BTC (S2: one position at a time)."""
@@ -249,7 +302,7 @@ class TradingBot:
         # ══════════════════════════════════════════
         # LAYER 6: POSITION SIZING
         # ══════════════════════════════════════════
-        equity = self.state.get('current_equity', 1_000_000)
+        equity = self.state.get('current_equity', STARTING_CAPITAL)
         trade_history = self.state.get('trade_history', [])
 
         pos_result = calculate_position(
@@ -331,6 +384,8 @@ class TradingBot:
         while self.running:
             try:
                 self.run_cycle()
+                self.send_heartbeat()
+                self.send_daily_summary()
                 save_state(self.state)
                 time.sleep(TRADE_INTERVAL_SECONDS)
 

@@ -6,7 +6,7 @@ Owner: Narhen
 import json
 import os
 from datetime import datetime
-from config import STATE_FILE
+from config import STATE_FILE, STARTING_CAPITAL
 
 
 def save_state(state: dict):
@@ -36,8 +36,8 @@ def default_state() -> dict:
     return {
         'positions': [],             # Current open positions
         'trade_history': [],         # Completed trades (for Kelly)
-        'peak_equity': 1_000_000,    # Highest portfolio value seen
-        'current_equity': 1_000_000,
+        'peak_equity': STARTING_CAPITAL,
+        'current_equity': STARTING_CAPITAL,
         'halt_until': None,          # Timestamp when halt expires
         'cooldown_until': None,      # Timestamp when cooldown expires
         'blocker_until': None,       # Reversal blocker cooldown
