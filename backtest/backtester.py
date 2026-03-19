@@ -23,7 +23,7 @@ from config import (
 )
 from strategy.regime import detect_regime, calculate_atr
 from strategy.signals import generate_signal
-from strategy.reversal_blocker import check_reversal_block
+from strategy.reversal_blocker import check_reversal_block, reset_cooldown
 from strategy.timeframe import check_timeframe
 
 
@@ -383,8 +383,11 @@ def run_backtest(csv_path="data/btc_1h_90days.csv", initial_capital=50000,
         # ══════════════════════════════════════
         # LAYER 3: REVERSAL BLOCKER
         # ══════════════════════════════════════
-        safe = check_reversal_block(df_slice)
-        if not safe:
+        reset_cooldown()  # Reset time-based cooldown for backtesting (time.time() doesn't advance)
+        prices_list = df_slice['close'].tolist()[-20:]
+        volumes_list = df_slice['volume'].tolist()[-20:] if 'volume' in df_slice.columns else [0] * 20
+        blocker_result = check_reversal_block(prices_list, volumes_list, 0.0001, 'BUY')
+        if blocker_result.get('decision') == 'BLOCK':
             continue
 
         # ══════════════════════════════════════

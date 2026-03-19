@@ -192,9 +192,12 @@ class TradingBot:
         # ══════════════════════════════════════════
         # LAYER 3: REVERSAL BLOCKER
         # ══════════════════════════════════════════
-        safe = check_reversal_block(df_1h)
-        if not safe:
-            log.info(f"Cycle {cycle}: BLOCKED by reversal blocker. Signal={direction} from {source}")
+        prices_list = df_1h['close'].tolist()[-20:]
+        volumes_list = df_1h['volume'].tolist()[-20:] if 'volume' in df_1h.columns else [0] * 20
+        current_spread = (ask - bid) / price if price > 0 and ask > 0 and bid > 0 else 0
+        blocker_result = check_reversal_block(prices_list, volumes_list, current_spread, direction)
+        if blocker_result.get('decision') == 'BLOCK':
+            log.info(f"Cycle {cycle}: BLOCKED by reversal blocker. Reason={blocker_result.get('reason')}. Signal={direction} from {source}")
             return
 
         # ══════════════════════════════════════════
