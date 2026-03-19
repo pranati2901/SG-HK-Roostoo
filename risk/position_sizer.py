@@ -162,7 +162,8 @@ def _regime_multiplier(regime: str) -> float:
 # - 3 -> 1.0 (all 1H, 4H, Daily agree).
 # - 2 -> 0.5 (only two agree; be cautious).
 def _timeframe_multiplier(timeframe_score: int) -> float:
-    return {3: 1.0, 2: 0.5}.get(timeframe_score, 0.0)
+    # Score 1 is valid for SIDEWAYS mean-reversion — don't block it
+    return {3: 1.0, 2: 0.5, 1: 0.25}.get(timeframe_score, 0.0)
 
 
 # --- FUNCTION: _is_halted ---

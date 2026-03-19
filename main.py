@@ -247,6 +247,17 @@ class TradingBot:
             log.info(f"Cycle {cycle}: HOLD | Regime={regime} | Price=${price:.2f} | Source={source}")
             return
 
+        # PROTECT GAINS MODE: after profitable trades, require higher confidence
+        # This maximizes Sortino/Sharpe by avoiding giving back profits
+        trade_history = self.state.get('trade_history', [])
+        total_pnl = sum(t.get('pnl', 0) for t in trade_history)
+        if total_pnl > 0 and len(trade_history) >= 2:
+            # We're in profit — only take very high confidence trades
+            self.state['_protect_mode'] = True
+            log.info(f"Cycle {cycle}: PROTECT MODE active (P&L: ${total_pnl:+,.0f})")
+        else:
+            self.state['_protect_mode'] = False
+
         # S1: SELL = exit only. No position = ignore sell signal
         if direction == 'SELL' and not self.has_position():
             log.info(f"Cycle {cycle}: SELL signal but no position. Ignoring.")
@@ -313,10 +324,12 @@ class TradingBot:
             features = engineer_features(df_1h)
             xgb_prob = xgboost_confirm(features)
 
-        if xgb_prob < XGBOOST_MIN_PROBABILITY:
+        # In protect mode, require higher ML confidence (70%) to preserve gains
+        min_prob = 0.70 if self.state.get('_protect_mode') else XGBOOST_MIN_PROBABILITY
+        if xgb_prob < min_prob:
             log.info(
                 f"Cycle {cycle}: BLOCKED by XGBoost. "
-                f"Prob={xgb_prob:.3f} < {XGBOOST_MIN_PROBABILITY}"
+                f"Prob={xgb_prob:.3f} < {min_prob} {'(PROTECT MODE)' if self.state.get('_protect_mode') else ''}"
             )
             return
 

@@ -379,15 +379,17 @@ class TradeExecutor:
     def _evaluate_trailing(self, entry_price: float, current_price: float,
                           atr_14: float, regime: str, current_stop: float):
         if regime == "SIDEWAYS":
-            take_profit = entry_price + atr_14
-            stop = entry_price - ATR_STOP_MULTIPLIER * atr_14
+            # Take profit at 0.7x ATR — quick wins in bear market bounces
+            # Stop at 1.0x ATR — tighter than trending, better risk/reward
+            take_profit = entry_price + 0.7 * atr_14
+            stop = entry_price - 1.0 * atr_14
             if current_price >= take_profit:
                 return "FIXED_TAKE_PROFIT", stop, take_profit
             if current_price <= stop:
                 return "STOP_LOSS_FIXED", stop, take_profit
             return None, stop, take_profit
 
-        # TRENDING: trailing stop
+        # TRENDING: trailing stop at 1.5x ATR
         candidate = current_price - ATR_STOP_MULTIPLIER * atr_14
         new_stop = max(current_stop, candidate)
         if current_price <= new_stop:
