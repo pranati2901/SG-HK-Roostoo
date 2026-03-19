@@ -408,6 +408,7 @@ class TradingBot:
 
             except KeyboardInterrupt:
                 log.info("\nBot stopped by user (Ctrl+C)")
+                send_alert("<b>BOT STOPPED</b>\nManually stopped by user (Ctrl+C)")
                 self.running = False
             except Exception as e:
                 log.error(f"Unexpected error in main loop: {e}", exc_info=True)
@@ -416,6 +417,7 @@ class TradingBot:
 
         log.info("BOT STOPPED")
         save_state(self.state)
+        send_alert("<b>BOT STOPPED</b>\nBot has shut down. Check EC2.")
 
 
 if __name__ == "__main__":
