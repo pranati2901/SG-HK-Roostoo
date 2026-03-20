@@ -24,6 +24,7 @@ from config import (
     TRADING_PAIR, TRADE_INTERVAL_SECONDS, LOG_FILE, LOG_LEVEL,
     XGBOOST_MIN_PROBABILITY, LOGS_DIR, STARTING_CAPITAL,
     PROTECT_DAYS_BEFORE_END, RSI_OVERSOLD,
+    ADX_TREND_THRESHOLD, ADX_NOTREND_THRESHOLD,
 )
 from roostoo_client import RoostooClient
 from data.candle_builder import CandleBuilder
@@ -259,8 +260,9 @@ class TradingBot:
         _atr_pct = float((_atr_s.dropna() < _atr_val).mean()) if len(_atr_s.dropna()) > 50 else 0.5
         _bb_w = calculate_bb_width(df_1h)
         log.info(
-            f"Cycle {cycle}: L1 REGIME={regime} | ADX={_adx:.1f} ATR_pct={_atr_pct:.2f} "
-            f"BB_w={_bb_w:.4f} F&G={self.fear_greed} Breadth={self.breadth:.2f} | Price=${price:.2f}"
+            f"Cycle {cycle}: L1 REGIME={regime} | ADX={_adx:.1f}(trend>{ADX_TREND_THRESHOLD}/side<{ADX_NOTREND_THRESHOLD}) "
+            f"ATR=${_atr_val:.0f} ATR_pct={_atr_pct:.2f}(vol>0.85) "
+            f"F&G={self.fear_greed} Breadth={self.breadth:.2f} | Price=${price:.2f}"
         )
 
         # ══════════════════════════════════════════
