@@ -14,6 +14,10 @@ from config import HISTORICAL_DATA_FILE
 
 log = logging.getLogger(__name__)
 
+# Flag: True while bootstrap (Binance) candles dominate the BB/z-score window.
+# Set to False after 20+ live Roostoo 1H candles are appended.
+BOOTSTRAP_DOMINANT = True
+
 
 class CandleBuilder:
     """
@@ -101,6 +105,13 @@ class CandleBuilder:
                         )
 
             self.df_1h = pd.concat([self.df_1h, new_1h], ignore_index=True)
+
+            # Track live candle count; clear bootstrap flag after 20
+            global BOOTSTRAP_DOMINANT
+            self._live_candle_count = getattr(self, '_live_candle_count', 0) + len(new_1h)
+            if self._live_candle_count >= 20 and BOOTSTRAP_DOMINANT:
+                BOOTSTRAP_DOMINANT = False
+                log.info(f"Bootstrap dominant cleared: {self._live_candle_count} live candles appended")
         else:
             self.df_1h = new_1h
 

@@ -8,6 +8,7 @@ Generates BUY/SELL/HOLD signals based on current regime.
 - VOLATILE → almost nothing passes
 """
 
+import logging
 import numpy as np
 import pandas as pd
 from config import (
@@ -16,6 +17,8 @@ from config import (
     RSI_PERIOD, RSI_OVERSOLD, RSI_OVERBOUGHT,
     MACD_FAST, MACD_SLOW, MACD_SIGNAL,
 )
+
+log = logging.getLogger(__name__)
 
 
 def _ema(series: pd.Series, period: int) -> pd.Series:
@@ -100,6 +103,17 @@ def _sideways_signals(df: pd.DataFrame) -> dict:
     mean_price = close.rolling(window=20).mean().iloc[-1]
     std_price = close.rolling(window=20).std().iloc[-1]
     z_score = (current_price - mean_price) / std_price if std_price > 0 else 0
+
+    # Suppress BB signals while bootstrap data dominates (stale Binance prices)
+    from data.candle_builder import BOOTSTRAP_DOMINANT
+    if BOOTSTRAP_DOMINANT:
+        # BB/z-score unreliable — only use RSI (which is relative, not price-anchored)
+        if rsi_val < RSI_OVERSOLD:
+            return {'direction': 'BUY', 'source': 'rsi_oversold_bootstrap'}
+        elif rsi_val > RSI_OVERBOUGHT:
+            return {'direction': 'SELL', 'source': 'rsi_overbought_bootstrap'}
+        log.info(f"L2 BB suppressed (bootstrap dominant) | RSI={rsi_val:.1f} Z={z_score:.2f}")
+        return {'direction': 'HOLD', 'source': 'bootstrap_stale'}
 
     # Decision — BB touch alone is sufficient in SIDEWAYS
     # Price below lower BB is the oversold signal; RSI confirms but doesn't gate
