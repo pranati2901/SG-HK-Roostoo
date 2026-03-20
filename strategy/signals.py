@@ -101,13 +101,14 @@ def _sideways_signals(df: pd.DataFrame) -> dict:
     std_price = close.rolling(window=20).std().iloc[-1]
     z_score = (current_price - mean_price) / std_price if std_price > 0 else 0
 
-    # Decision
-    if rsi_val < RSI_OVERSOLD and current_price <= lower_band:
-        return {'direction': 'BUY', 'source': 'rsi_bb_oversold'}
+    # Decision — BB touch alone is sufficient in SIDEWAYS
+    # Price below lower BB is the oversold signal; RSI confirms but doesn't gate
+    if current_price <= lower_band:
+        return {'direction': 'BUY', 'source': 'bb_oversold'}
     elif rsi_val < RSI_OVERSOLD or z_score < -1.5:
         return {'direction': 'BUY', 'source': 'mean_reversion_buy'}
-    elif rsi_val > RSI_OVERBOUGHT and current_price >= upper_band:
-        return {'direction': 'SELL', 'source': 'rsi_bb_overbought'}
+    elif current_price >= upper_band:
+        return {'direction': 'SELL', 'source': 'bb_overbought'}
     elif rsi_val > RSI_OVERBOUGHT or z_score > 1.5:
         return {'direction': 'SELL', 'source': 'mean_reversion_sell'}
     else:

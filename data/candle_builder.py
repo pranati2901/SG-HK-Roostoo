@@ -6,10 +6,13 @@ Also handles cold start bootstrap from Binance CSV.
 """
 
 import os
+import logging
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from config import HISTORICAL_DATA_FILE
+
+log = logging.getLogger(__name__)
 
 
 class CandleBuilder:
@@ -83,6 +86,20 @@ class CandleBuilder:
             last_ts = self.df_1h['timestamp'].max() if 'timestamp' in self.df_1h.columns else None
             if last_ts is not None:
                 new_1h = new_1h[new_1h['timestamp'] > last_ts]
+
+            # Data integrity check: warn if live ticks diverge from bootstrap
+            if not new_1h.empty and 'close' in self.df_1h.columns:
+                bootstrap_end = float(self.df_1h['close'].iloc[-1])
+                live_close = float(new_1h['close'].iloc[0])
+                if bootstrap_end > 0:
+                    divergence = abs(live_close - bootstrap_end) / bootstrap_end
+                    if divergence > 0.05:
+                        log.warning(
+                            f"Binance/Roostoo price divergence: {divergence:.1%} "
+                            f"(bootstrap=${bootstrap_end:,.0f} vs live=${live_close:,.0f}). "
+                            f"BB/z-score may be stale until live candles dominate."
+                        )
+
             self.df_1h = pd.concat([self.df_1h, new_1h], ignore_index=True)
         else:
             self.df_1h = new_1h
