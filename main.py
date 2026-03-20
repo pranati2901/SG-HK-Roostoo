@@ -241,24 +241,27 @@ class TradingBot:
         self.fetch_external_data()
 
         # Get DataFrames
+        # df_1h includes live candle (for RSI/BB/signals)
+        # df_1h_base excludes live candle (for ATR/ADX/regime — avoids gap spike)
         df_1h = self.candles.get_df('1h')
+        df_1h_base = self.candles.df_1h  # Raw bootstrap + aggregated candles, no live candle
 
         if df_1h.empty or len(df_1h) < 55:
             log.info(f"Cycle {cycle}: Waiting for data ({len(df_1h)} 1H candles, need 55+). Price=${price:.2f}")
             return
 
         # ══════════════════════════════════════════
-        # LAYER 1: REGIME DETECTION
+        # LAYER 1: REGIME DETECTION (uses base df — no live candle gap spike)
         # ══════════════════════════════════════════
-        regime = detect_regime(df_1h, self.fear_greed, self.funding_rate, self.breadth)
+        regime = detect_regime(df_1h_base, self.fear_greed, self.funding_rate, self.breadth)
 
-        # L1 gate logging — compute indicators for visibility
+        # L1 gate logging — uses base df (no gap spike)
         from strategy.regime import calculate_adx, calculate_bb_width
-        _adx = calculate_adx(df_1h)
-        _atr_s = calculate_atr(df_1h)
+        _adx = calculate_adx(df_1h_base)
+        _atr_s = calculate_atr(df_1h_base)
         _atr_val = float(_atr_s.iloc[-1]) if not _atr_s.empty else 0
         _atr_pct = float((_atr_s.dropna() < _atr_val).mean()) if len(_atr_s.dropna()) > 50 else 0.5
-        _bb_w = calculate_bb_width(df_1h)
+        _bb_w = calculate_bb_width(df_1h_base)
         log.info(
             f"Cycle {cycle}: L1 REGIME={regime} | ADX={_adx:.1f}(trend>{ADX_TREND_THRESHOLD}/side<{ADX_NOTREND_THRESHOLD}) "
             f"ATR=${_atr_val:.0f} ATR_pct={_atr_pct:.2f}(vol>0.85) "
@@ -424,7 +427,7 @@ class TradingBot:
         # Estimate stop distance for sizing (default 3% of price)
         est_stop_distance = price * 0.03
 
-        atr_series = calculate_atr(df_1h)
+        atr_series = calculate_atr(df_1h_base)
         atr_14 = float(atr_series.iloc[-1]) if not atr_series.empty else est_stop_distance
 
         # Compute rolling 3-day Sharpe from recent trades (for kill switch)

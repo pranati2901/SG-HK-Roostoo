@@ -220,7 +220,6 @@ class CandleBuilder:
 
     def _live_candle(self) -> pd.DataFrame:
         """Build a synthetic candle from un-aggregated ticks (partial hour)."""
-        # Ticks since the last full hour rebuild
         remainder = len(self.ticks) % 60
         recent = self.ticks[-remainder:] if remainder > 0 else self.ticks[-60:]
         if not recent:
