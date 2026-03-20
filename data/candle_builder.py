@@ -218,9 +218,32 @@ class CandleBuilder:
             vol_d = df['volume'].resample('1D').sum()
             self.df_daily['volume'] = vol_d.values[:len(self.df_daily)]
 
+    def _live_candle(self) -> pd.DataFrame:
+        """Build a synthetic candle from un-aggregated ticks (partial hour)."""
+        # Ticks since the last full hour rebuild
+        remainder = len(self.ticks) % 60
+        recent = self.ticks[-remainder:] if remainder > 0 else self.ticks[-60:]
+        if not recent:
+            return pd.DataFrame()
+        prices = [t['price'] for t in recent]
+        volumes = [t.get('volume', 0) for t in recent]
+        return pd.DataFrame([{
+            'timestamp': recent[-1]['timestamp'],
+            'open': prices[0],
+            'high': max(prices),
+            'low': min(prices),
+            'close': prices[-1],
+            'volume': sum(volumes),
+        }])
+
     def get_df(self, timeframe: str = '1h') -> pd.DataFrame:
-        """Get candle DataFrame for a timeframe."""
+        """Get candle DataFrame for a timeframe.
+        For 1h: appends a live partial candle so indicators reflect current price."""
         if timeframe == '1h':
+            if self.ticks and not self.df_1h.empty:
+                live = self._live_candle()
+                if not live.empty:
+                    return pd.concat([self.df_1h, live], ignore_index=True)
             return self.df_1h
         elif timeframe == '4h':
             return self.df_4h
